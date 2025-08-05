@@ -11,13 +11,18 @@ const Layout = ({ children }) => {
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: 'home' },
     { name: 'Timesheets', href: '/timesheets', icon: 'clock' },
-    { name: 'Geolocation', href: '/geolocation', icon: 'map' },
     { name: 'Communication', href: '/communication', icon: 'chat' },
     { name: 'Clients', href: '/clients', icon: 'users' },
     { name: 'Tasks', href: '/tasks', icon: 'checklist' },
     { name: 'Reports', href: '/reports', icon: 'document' },
     { name: 'Analytics', href: '/analytics', icon: 'chart' },
   ];
+
+  // Add geolocation management for managers and admins
+  const isManager = user?.role === 'manager' || user?.role === 'admin';
+  if (isManager) {
+    navigation.splice(2, 0, { name: 'Geofence Management', href: '/geolocation-management', icon: 'map' });
+  }
 
   const handleLogout = () => {
     logout();

@@ -4,12 +4,12 @@ import { useAuth } from './contexts/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Timesheets from './pages/Timesheets';
-import Geolocation from './pages/Geolocation';
 import Communication from './pages/Communication';
 import Clients from './pages/Clients';
 import Tasks from './pages/Tasks';
 import Reports from './pages/Reports';
 import Analytics from './pages/Analytics';
+import GeolocationManagement from './pages/GeolocationManagement';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
 
@@ -33,12 +33,12 @@ function App() {
                 <Routes>
                   <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/timesheets" element={<Timesheets />} />
-                  <Route path="/geolocation" element={<Geolocation />} />
                   <Route path="/communication" element={<Communication />} />
                   <Route path="/clients" element={<Clients />} />
                   <Route path="/tasks" element={<Tasks />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/geolocation-management" element={<GeolocationManagement />} />
                 </Routes>
               </Layout>
             } />

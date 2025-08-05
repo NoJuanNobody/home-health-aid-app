@@ -70,6 +70,29 @@ def register():
         'refresh_token': refresh_token
     }), 201
 
+@auth_bp.route('/login/dev', methods=['POST'])
+def login_dev():
+    """Development login endpoint - creates JWT token for admin user"""
+    # Find the admin user
+    admin_role = Role.query.filter_by(name='admin').first()
+    if not admin_role:
+        return jsonify({'error': 'Admin role not found'}), 500
+    
+    admin_user = User.query.filter_by(role_id=admin_role.id).first()
+    if not admin_user:
+        return jsonify({'error': 'Admin user not found'}), 500
+    
+    # Generate tokens
+    access_token = create_access_token(identity=admin_user.id)
+    refresh_token = create_refresh_token(identity=admin_user.id)
+    
+    return jsonify({
+        'message': 'Development login successful',
+        'user': admin_user.to_dict(),
+        'access_token': access_token,
+        'refresh_token': refresh_token
+    })
+
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """Login user"""

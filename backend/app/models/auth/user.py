@@ -22,11 +22,10 @@ class User(db.Model):
     
     # Relationships
     role = db.relationship('Role', backref='users')
-    timesheets = db.relationship('Timesheet', backref='user', lazy='dynamic')
+    timesheets = db.relationship('Timesheet', foreign_keys='Timesheet.user_id', backref='user', lazy='dynamic')
     locations = db.relationship('Location', backref='user', lazy='dynamic')
-    messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy='dynamic')
-    messages_received = db.relationship('Message', foreign_keys='Message.recipient_id', backref='recipient', lazy='dynamic')
-    tasks_assigned = db.relationship('TaskAssignment', backref='assigned_user', lazy='dynamic')
+    messages_sent = db.relationship('Message', foreign_keys='Message.sender_id', lazy='dynamic')
+    messages_received = db.relationship('Message', foreign_keys='Message.recipient_id', lazy='dynamic')
     
     def __init__(self, **kwargs):
         super(User, self).__init__(**kwargs)
