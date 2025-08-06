@@ -19,8 +19,13 @@ const GeolocationManagement = () => {
     center_latitude: '',
     center_longitude: '',
     radius_meters: '',
-    geofence_type: 'circle'
+    geofence_type: 'circle',
+    is_active: true
   });
+
+  // Address lookup state
+  const [addressLookup, setAddressLookup] = useState('');
+  const [isLookingUpAddress, setIsLookingUpAddress] = useState(false);
 
   // Location state
   const [isGettingLocation, setIsGettingLocation] = useState(false);
@@ -40,6 +45,7 @@ const GeolocationManagement = () => {
     try {
       setLoading(true);
       const response = await api.get('/geolocation/geofences');
+      console.log('Fetched geofences:', response.data);
       setGeofences(response.data.geofences);
     } catch (error) {
       console.error('Error fetching geofences:', error);
@@ -51,7 +57,7 @@ const GeolocationManagement = () => {
 
   const fetchClients = async () => {
     try {
-      const response = await api.get('/clients');
+      const response = await api.get('/client');
       setClients(response.data.clients);
     } catch (error) {
       console.error('Error fetching clients:', error);
@@ -71,10 +77,12 @@ const GeolocationManagement = () => {
       };
 
       if (editingGeofence) {
-        await api.put(`/geolocation/geofences/${editingGeofence.id}`, geofenceData);
+        const response = await api.put(`/geolocation/geofences/${editingGeofence.id}`, geofenceData);
+        console.log('Geofence updated:', response.data);
         toast.success('Geofence updated successfully!');
       } else {
-        await api.post('/geolocation/geofences', geofenceData);
+        const response = await api.post('/geolocation/geofences', geofenceData);
+        console.log('Geofence created:', response.data);
         toast.success('Geofence created successfully!');
       }
 
@@ -97,7 +105,8 @@ const GeolocationManagement = () => {
       center_latitude: geofence.center_latitude.toString(),
       center_longitude: geofence.center_longitude.toString(),
       radius_meters: geofence.radius_meters.toString(),
-      geofence_type: geofence.geofence_type
+      geofence_type: geofence.geofence_type,
+      is_active: geofence.is_active
     });
     setShowCreateForm(true);
   };
@@ -123,7 +132,8 @@ const GeolocationManagement = () => {
       center_latitude: '',
       center_longitude: '',
       radius_meters: '',
-      geofence_type: 'circle'
+      geofence_type: 'circle',
+      is_active: true
     });
   };
 
@@ -131,6 +141,41 @@ const GeolocationManagement = () => {
     setShowCreateForm(false);
     setEditingGeofence(null);
     resetForm();
+  };
+
+  const handleAddressLookup = async () => {
+    if (!addressLookup.trim()) {
+      toast.error('Please enter an address to lookup');
+      return;
+    }
+
+    setIsLookingUpAddress(true);
+    try {
+      const response = await api.post('/geolocation/geocode/address', {
+        address: addressLookup,
+        max_retries: 3,
+        timeout: 15
+      });
+
+      if (response.data.success) {
+        const { latitude, longitude, formatted_address, provider } = response.data.data;
+        setFormData({
+          ...formData,
+          center_latitude: latitude.toString(),
+          center_longitude: longitude.toString(),
+          description: formatted_address
+        });
+        toast.success(`Address coordinates found! (Provider: ${provider || 'unknown'})`);
+      } else {
+        toast.error('Could not find coordinates for this address. Try a different format.');
+      }
+    } catch (error) {
+      console.error('Error looking up address:', error);
+      const errorMessage = error.response?.data?.error || 'Failed to lookup address. Please try again or check the address format.';
+      toast.error(errorMessage);
+    } finally {
+      setIsLookingUpAddress(false);
+    }
   };
 
   const getCurrentLocation = () => {
@@ -215,9 +260,16 @@ const GeolocationManagement = () => {
         {/* Create/Edit Form */}
         {showCreateForm && (
           <div className="mb-8 bg-white p-6 rounded-lg shadow">
-            <h2 className="text-xl font-semibold mb-4">
-              {editingGeofence ? 'Edit Geofence' : 'Create New Geofence'}
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">
+                {editingGeofence ? 'Edit Geofence' : 'Create New Geofence'}
+              </h2>
+              {editingGeofence && (
+                <span className="px-3 py-1 bg-blue-100 text-blue-800 text-sm font-medium rounded-full">
+                  Editing: {editingGeofence.name}
+                </span>
+              )}
+            </div>
             
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -246,11 +298,15 @@ const GeolocationManagement = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Select a client</option>
-                    {clients.map(client => (
-                      <option key={client.id} value={client.id}>
-                        {client.first_name} {client.last_name}
-                      </option>
-                    ))}
+                    {clients && clients.length > 0 ? (
+                      clients.map(client => (
+                        <option key={client.id} value={client.id}>
+                          {client.first_name} {client.last_name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>No clients available</option>
+                    )}
                   </select>
                 </div>
 
@@ -265,6 +321,37 @@ const GeolocationManagement = () => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g., 123 Main Street, New York, NY"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Address Lookup
+                  </label>
+                  <div className="flex space-x-2">
+                    <input
+                      type="text"
+                      value={addressLookup}
+                      onChange={(e) => setAddressLookup(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Enter address to get coordinates"
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddressLookup()}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddressLookup}
+                      disabled={isLookingUpAddress}
+                      className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLookingUpAddress ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      ) : (
+                        '🔍'
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Enter an address to automatically get coordinates
+                  </p>
                 </div>
 
                 <div>
@@ -347,6 +434,21 @@ const GeolocationManagement = () => {
                 </div>
               )}
 
+              <div className="flex items-center space-x-4 pt-4">
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="is_active"
+                    checked={formData.is_active}
+                    onChange={(e) => setFormData({...formData, is_active: e.target.checked})}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="is_active" className="ml-2 text-sm text-gray-700">
+                    Active Geofence
+                  </label>
+                </div>
+              </div>
+
               <div className="flex space-x-4 pt-4">
                 <button
                   type="submit"
@@ -410,7 +512,12 @@ const GeolocationManagement = () => {
                         <div className="text-sm text-gray-500">{geofence.description}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">Client ID: {geofence.client_id}</div>
+                        <div className="text-sm text-gray-900">
+                          {(() => {
+                            const client = clients.find(c => c.id === geofence.client_id);
+                            return client ? `${client.first_name} ${client.last_name}` : `Client ID: ${geofence.client_id}`;
+                          })()}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
@@ -422,26 +529,53 @@ const GeolocationManagement = () => {
                         <div className="text-sm text-gray-500">{geofence.geofence_type}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          geofence.is_active
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}>
-                          {geofence.is_active ? 'Active' : 'Inactive'}
-                        </span>
+                        <div className="flex items-center space-x-2">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            geofence.is_active
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {geofence.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.put(`/geolocation/geofences/${geofence.id}`, {
+                                  ...geofence,
+                                  is_active: !geofence.is_active
+                                });
+                                toast.success(`Geofence ${!geofence.is_active ? 'activated' : 'deactivated'} successfully!`);
+                                fetchGeofences();
+                              } catch (error) {
+                                console.error('Error toggling geofence status:', error);
+                                toast.error('Failed to update geofence status');
+                              }
+                            }}
+                            className={`text-xs px-2 py-1 rounded ${
+                              geofence.is_active
+                                ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+                                : 'bg-green-100 text-green-800 hover:bg-green-200'
+                            }`}
+                            title={geofence.is_active ? 'Deactivate geofence' : 'Activate geofence'}
+                          >
+                            {geofence.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button
                           onClick={() => handleEdit(geofence)}
-                          className="text-blue-600 hover:text-blue-900 mr-4"
+                          className="text-blue-600 hover:text-blue-900 mr-2"
+                          title="Edit geofence details"
                         >
-                          Edit
+                          ✏️ Edit
                         </button>
                         <button
                           onClick={() => handleDelete(geofence.id)}
                           className="text-red-600 hover:text-red-900"
+                          title="Delete geofence"
                         >
-                          Delete
+                          🗑️ Delete
                         </button>
                       </td>
                     </tr>

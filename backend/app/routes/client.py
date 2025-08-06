@@ -5,10 +5,75 @@ from app.models.client.client import Client
 from app.models.client.care_plan import CarePlan
 from app.models.auth.user import User
 from app.models.reporting.audit_log import AuditLog
+from app.models.geolocation.geofence import Geofence
+from app.services.geolocation.geocoding_service import geocoding_service
 from datetime import datetime
 import uuid
 
 client_bp = Blueprint('client', __name__)
+
+def create_client_geofence(client, current_user_id):
+    """Create a geofence for a client's home address"""
+    try:
+        # If client already has coordinates, use them
+        if client.latitude and client.longitude:
+            latitude = client.latitude
+            longitude = client.longitude
+        elif client.address:
+            # Geocode the address to get coordinates
+            geocode_result = geocoding_service.address_to_coordinates(client.address)
+            if geocode_result:
+                latitude = geocode_result['latitude']
+                longitude = geocode_result['longitude']
+                # Update client with geocoded coordinates
+                client.latitude = latitude
+                client.longitude = longitude
+                db.session.commit()
+            else:
+                # If geocoding fails, skip geofence creation
+                return None
+        else:
+            # No address or coordinates available
+            return None
+        
+        # Create geofence for client's home
+        geofence = Geofence(
+            name=f"{client.first_name} {client.last_name} Residence",
+            description=f"Home address: {client.address}",
+            client_id=client.id,
+            center_latitude=latitude,
+            center_longitude=longitude,
+            radius_meters=100,  # Default 100m radius
+            geofence_type='circle',
+            created_by=current_user_id
+        )
+        
+        db.session.add(geofence)
+        db.session.commit()
+        
+        # Log audit for geofence creation
+        audit_log = AuditLog(
+            user_id=current_user_id,
+            action='geofence_created_for_client',
+            resource_type='geofence',
+            resource_id=geofence.id,
+            details={
+                'client_id': client.id,
+                'client_name': f"{client.first_name} {client.last_name}",
+                'address': client.address,
+                'coordinates': f"{latitude}, {longitude}"
+            },
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get('User-Agent')
+        )
+        db.session.add(audit_log)
+        db.session.commit()
+        
+        return geofence
+        
+    except Exception as e:
+        print(f"Error creating geofence for client {client.id}: {str(e)}")
+        return None
 
 @client_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -67,6 +132,9 @@ def create_client():
     db.session.add(client)
     db.session.commit()
     
+    # Create geofence for client's home address
+    geofence = create_client_geofence(client, current_user_id)
+    
     # Log audit
     audit_log = AuditLog(
         user_id=current_user_id,
@@ -80,10 +148,20 @@ def create_client():
     db.session.add(audit_log)
     db.session.commit()
     
-    return jsonify({
+    response_data = {
         'message': 'Client created successfully',
         'client': client.to_dict()
-    }), 201
+    }
+    
+    if geofence:
+        response_data['geofence_created'] = True
+        response_data['geofence'] = geofence.to_dict()
+        response_data['message'] += ' and home geofence created'
+    else:
+        response_data['geofence_created'] = False
+        response_data['message'] += ' (no geofence created - address required)'
+    
+    return jsonify(response_data), 201
 
 @client_bp.route('/<client_id>', methods=['GET'])
 @jwt_required()
@@ -174,6 +252,77 @@ def update_client(client_id):
         'message': 'Client updated successfully',
         'client': client.to_dict()
     })
+
+@client_bp.route('/<client_id>', methods=['DELETE'])
+@jwt_required()
+def delete_client(client_id):
+    """Delete client (soft delete)"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if user.role.name not in ['admin', 'manager']:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    client = Client.query.get(client_id)
+    if not client:
+        return jsonify({'error': 'Client not found'}), 404
+    
+    # Soft delete - set is_active to False
+    client.is_active = False
+    db.session.commit()
+    
+    # Log audit
+    audit_log = AuditLog(
+        user_id=current_user_id,
+        action='client_deleted',
+        resource_type='client',
+        resource_id=client.id,
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent')
+    )
+    db.session.add(audit_log)
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Client deleted successfully'
+    })
+
+@client_bp.route('/<client_id>/geofence', methods=['POST'])
+@jwt_required()
+def create_client_geofence_endpoint(client_id):
+    """Create a geofence for an existing client"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if user.role.name not in ['admin', 'manager']:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    client = Client.query.get(client_id)
+    if not client:
+        return jsonify({'error': 'Client not found'}), 404
+    
+    if not client.address:
+        return jsonify({'error': 'Client must have an address to create a geofence'}), 400
+    
+    # Check if client already has a geofence
+    existing_geofence = Geofence.query.filter_by(client_id=client_id, is_active=True).first()
+    if existing_geofence:
+        return jsonify({'error': 'Client already has an active geofence'}), 400
+    
+    # Create geofence for client
+    geofence = create_client_geofence(client, current_user_id)
+    
+    if geofence:
+        return jsonify({
+            'success': True,
+            'message': 'Home geofence created successfully',
+            'geofence': geofence.to_dict()
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Failed to create geofence - could not geocode address'
+        }), 400
 
 @client_bp.route('/<client_id>/care-plans', methods=['GET'])
 @jwt_required()

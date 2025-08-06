@@ -32,3 +32,4 @@ PyJWT==2.8.0
 marshmallow==3.20.1
 marshmallow-sqlalchemy==0.29.0
 alembic==1.12.1
+certifi==2023.11.17

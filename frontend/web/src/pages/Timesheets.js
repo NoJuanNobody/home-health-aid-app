@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-le
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import api from '../services/apiService';
+import toast from 'react-hot-toast';
 
 // Fix for default markers in Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -46,33 +47,13 @@ const Timesheets = () => {
   const [selectedClient, setSelectedClient] = useState(null);
   const [isTrackingLocation, setIsTrackingLocation] = useState(false);
   const [locationError, setLocationError] = useState(null);
-  const [timesheetEntries, setTimesheetEntries] = useState([
-    {
-      id: 1,
-      client: 'Margaret Johnson',
-      location: '123 Main St, City',
-      clockIn: '08:00',
-      clockOut: '12:00',
-      duration: '4h 0m',
-      status: 'completed',
-      geofence: 'Client A Residence',
-      coordinates: { latitude: 40.7128, longitude: -74.0060 }
-    },
-    {
-      id: 2,
-      client: 'Robert Smith',
-      location: '456 Oak Ave, City',
-      clockIn: '13:00',
-      clockOut: null,
-      duration: '2h 45m',
-      status: 'in-progress',
-      geofence: 'Client B Residence',
-      coordinates: { latitude: 40.7589, longitude: -73.9851 }
-    }
-  ]);
+  const [isGettingLocation, setIsGettingLocation] = useState(true);
+  const [timesheetEntries, setTimesheetEntries] = useState([]);
+  const [clients, setClients] = useState([]);
   const [geofences, setGeofences] = useState([]);
   const [loadingGeofences, setLoadingGeofences] = useState(true);
   const [geofenceError, setGeofenceError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const mapRef = useRef(null);
 
@@ -81,6 +62,42 @@ const Timesheets = () => {
       setCurrentTime(new Date());
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Get initial location when component mounts
+  useEffect(() => {
+    const getInitialLocation = () => {
+      if (navigator.geolocation) {
+        setIsGettingLocation(true);
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude, accuracy } = position.coords;
+            setCurrentLocation({
+              latitude,
+              longitude,
+              accuracy: Math.round(accuracy)
+            });
+            setLocationError(null);
+            setIsGettingLocation(false);
+            console.log('Initial location set:', { latitude, longitude, accuracy });
+          },
+          (error) => {
+            console.error('Initial location error:', error);
+            setLocationError(getLocationErrorMessage(error));
+            setIsGettingLocation(false);
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 30000
+          }
+        );
+      } else {
+        setIsGettingLocation(false);
+      }
+    };
+
+    getInitialLocation();
   }, []);
 
   // Start continuous location tracking
@@ -193,23 +210,25 @@ const Timesheets = () => {
     return R * c;
   };
 
-  const handleClockIn = () => {
+  const handleClockIn = async () => {
     // Start location tracking if not already tracking
     if (!isTrackingLocation) {
       startLocationTracking();
     }
     
-    // Get current location and proceed with clock in
-    getCurrentLocation().then(location => {
+    try {
+      // Get current location
+      const location = await getCurrentLocation();
+      
       // Update geofence status based on new location
       const updatedGeofences = geofences.map(geofence => {
         const distance = calculateDistance(
           location.latitude, location.longitude,
-          geofence.latitude, geofence.longitude
+          geofence.center_latitude, geofence.center_longitude
         );
         return {
           ...geofence,
-          isInside: distance <= geofence.radius / 1000 // Convert to km
+          isInside: distance <= geofence.radius_meters / 1000 // Convert to km
         };
       });
       
@@ -218,65 +237,119 @@ const Timesheets = () => {
       // Check if user is inside any geofence
       const insideGeofence = updatedGeofences.find(g => g.isInside);
       if (!insideGeofence) {
-        alert('You must be inside a client geofence to clock in.');
+        toast.error('You must be inside a client geofence to clock in.');
         return;
       }
       
-      // Create new timesheet entry
-      const newEntry = {
-        id: Date.now(),
-        client: insideGeofence.client,
-        location: insideGeofence.address,
-        clockIn: currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        clockOut: null,
-        duration: '0h 0m',
-        status: 'in-progress',
-        geofence: insideGeofence.name,
-        coordinates: {
-          latitude: location.latitude,
-          longitude: location.longitude
-        },
-        accuracy: location.accuracy
+      // Find the client for this geofence
+      const client = clients.find(c => c.id === insideGeofence.client_id);
+      if (!client) {
+        toast.error('Client not found for this geofence.');
+        return;
+      }
+      
+      // Create timesheet in backend
+      const today = new Date().toISOString().split('T')[0];
+      const timesheetData = {
+        client_id: insideGeofence.client_id,
+        date: today,
+        notes: `Clocked in at ${client.first_name} ${client.last_name}'s residence`
       };
       
-      setTimesheetEntries(prev => [...prev, newEntry]);
+      let timesheetResponse;
+      try {
+        timesheetResponse = await api.post('/timesheet', timesheetData);
+      } catch (error) {
+        if (error.response?.data?.error?.includes('already clocked in')) {
+          toast.error('You are already clocked in for this client. Please clock out first.');
+          return;
+        }
+        throw error;
+      }
+      
+      const timesheet = timesheetResponse.data.timesheet;
+      
+      // Clock in with location
+      const clockInData = {
+        location: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          address: insideGeofence.description
+        }
+      };
+      
+      await api.post(`/timesheet/${timesheet.id}/clock-in`, clockInData);
+      
+      // Update local state
+      setTimesheetEntries(prev => [...prev, timesheet]);
       setIsClockedIn(true);
-      setSelectedClient(insideGeofence);
-    }).catch(error => {
-      console.error('Error getting location for clock in:', error);
-      alert('Unable to get your location. Please ensure location services are enabled and try again.');
-    });
+      setSelectedClient(client);
+      
+      toast.success(`Clocked in at ${client.first_name} ${client.last_name}'s residence`);
+      
+    } catch (error) {
+      console.error('Error clocking in:', error);
+      toast.error(error.response?.data?.error || 'Failed to clock in');
+    }
   };
 
-  const handleClockOut = () => {
-    if (!selectedClient) return;
-    
-    // Stop location tracking when clocking out
-    if (isTrackingLocation) {
-      stopLocationTracking();
-    }
-    
-    // Update the current entry with clock out time
-    setTimesheetEntries(prev => prev.map(entry => {
-      if (entry.status === 'in-progress') {
-        const clockInTime = new Date(`2024-01-15 ${entry.clockIn}`);
-        const clockOutTime = currentTime;
-        const durationMs = clockOutTime - clockInTime;
-        const hours = Math.floor(durationMs / (1000 * 60 * 60));
-        const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
-        
-        return {
-          ...entry,
-          clockOut: currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          duration: `${hours}h ${minutes}m`,
-          status: 'completed'
-        };
+  const handleClockOut = async () => {
+    try {
+      // Stop location tracking when clocking out
+      if (isTrackingLocation) {
+        stopLocationTracking();
       }
-      return entry;
-    }));
-    
-    setIsClockedIn(false);
-    setSelectedClient(null);
+      
+      // Find the active timesheet (check for any active timesheet, not just for selectedClient)
+      const activeTimesheet = timesheetEntries.find(entry => 
+        entry.status === 'active' && entry.clock_in_time && !entry.clock_out_time
+      );
+      
+      if (!activeTimesheet) {
+        toast.error('No active timesheet found. Please make sure you are clocked in.');
+        return;
+      }
+      
+      // Get current location for clock out
+      const location = await getCurrentLocation();
+      
+      // Find the client for this timesheet
+      const client = clients.find(c => c.id === activeTimesheet.client_id);
+      
+      // Clock out with location
+      const clockOutData = {
+        location: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          address: client?.address || 'Location not recorded'
+        }
+      };
+      
+      await api.post(`/timesheet/${activeTimesheet.id}/clock-out`, clockOutData);
+      
+      // Update local state
+      setTimesheetEntries(prev => prev.map(entry => 
+        entry.id === activeTimesheet.id 
+          ? { 
+              ...entry, 
+              status: 'completed', 
+              clock_out_time: new Date().toISOString(),
+              clock_out_location: clockOutData.location
+            }
+          : entry
+      ));
+      
+      setIsClockedIn(false);
+      setSelectedClient(null);
+      
+      toast.success(`Clocked out from ${client ? `${client.first_name} ${client.last_name}` : 'client'}'s residence. You can now start a new shift if needed.`);
+      
+    } catch (error) {
+      console.error('Error clocking out:', error);
+      toast.error(error.response?.data?.error || 'Failed to clock out');
+    }
   };
 
   const getStatusColor = (status) => {
@@ -289,6 +362,51 @@ const Timesheets = () => {
         return 'bg-gray-100 text-gray-800';
     }
   };
+
+  // Fetch data from backend
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        
+        // Fetch timesheets
+        const timesheetsResponse = await api.get('/timesheet');
+        console.log('Timesheets response:', timesheetsResponse.data);
+        setTimesheetEntries(timesheetsResponse.data.timesheets || []);
+        
+        // Fetch clients
+        const clientsResponse = await api.get('/client');
+        console.log('Clients response:', clientsResponse.data);
+        setClients(clientsResponse.data.clients || []);
+        
+        // Fetch geofences
+        const geofencesResponse = await api.get('/geolocation/geofences');
+        console.log('Geofences response:', geofencesResponse.data);
+        console.log('Geofences array:', geofencesResponse.data.geofences);
+        setGeofences(geofencesResponse.data.geofences || []);
+        
+        // Check if user is currently clocked in
+        const activeTimesheet = timesheetsResponse.data.timesheets?.find(entry => 
+          entry.status === 'active' && entry.clock_in_time && !entry.clock_out_time
+        );
+        
+        if (activeTimesheet) {
+          const client = clientsResponse.data.clients?.find(c => c.id === activeTimesheet.client_id);
+          setIsClockedIn(true);
+          setSelectedClient(client);
+        }
+        
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast.error('Failed to load data');
+      } finally {
+        setLoading(false);
+        setLoadingGeofences(false);
+      }
+    };
+
+    fetchData();
+  }, []);
 
   // Fetch geofences from backend
   useEffect(() => {
@@ -351,18 +469,51 @@ const Timesheets = () => {
   // Update geofence inside status based on current location
   useEffect(() => {
     if (geofences.length > 0 && currentLocation.latitude && currentLocation.longitude) {
-      const updatedGeofences = geofences.map(geofence => ({
-        ...geofence,
-        isInside: calculateDistance(
-          currentLocation.latitude,
-          currentLocation.longitude,
-          geofence.latitude,
-          geofence.longitude
-        ) <= geofence.radius
-      }));
+      const updatedGeofences = geofences.map(geofence => {
+        // Skip geofences without proper coordinates
+        if (!geofence.center_latitude || !geofence.center_longitude) {
+          return { ...geofence, isInside: false };
+        }
+        
+        return {
+          ...geofence,
+          isInside: calculateDistance(
+            currentLocation.latitude,
+            currentLocation.longitude,
+            geofence.center_latitude,
+            geofence.center_longitude
+          ) <= (geofence.radius_meters || 100) / 1000 // Convert to km
+        };
+      });
       setGeofences(updatedGeofences);
     }
   }, [currentLocation.latitude, currentLocation.longitude, geofences.length]);
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading timesheet data...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Ensure we have the required data before rendering
+  if (!geofences || !clients || !timesheetEntries) {
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <p className="text-gray-600">No data available</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
@@ -377,7 +528,7 @@ const Timesheets = () => {
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Location Map</h2>
         <div className="h-96 rounded-lg overflow-hidden">
           <MapContainer
-            center={[currentLocation.latitude, currentLocation.longitude]}
+            center={[currentLocation?.latitude || 40.7128, currentLocation?.longitude || -74.0060]}
             zoom={13}
             style={{ height: '100%', width: '100%' }}
             ref={mapRef}
@@ -388,79 +539,117 @@ const Timesheets = () => {
             />
             
             {/* Current Location Marker */}
-            <Marker
-              position={[currentLocation.latitude, currentLocation.longitude]}
-              icon={createCustomIcon('#3B82F6')}
-            >
-              <Popup>
-                <div>
-                  <h3 className="font-semibold">Current Location</h3>
-                  <p className="text-sm text-gray-600">
-                    {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
-                  </p>
-                  <p className="text-xs text-gray-500">Accuracy: {currentLocation.accuracy}m</p>
-                </div>
-              </Popup>
-            </Marker>
-
-            {/* Geofence Circles */}
-            {geofences.filter(g => g.is_active).map((geofence) => (
-              <Circle
-                key={geofence.id}
-                center={[geofence.latitude, geofence.longitude]}
-                radius={geofence.radius}
-                pathOptions={{
-                  color: geofence.isInside ? '#10B981' : '#6B7280',
-                  fillColor: geofence.isInside ? '#10B981' : '#6B7280',
-                  fillOpacity: 0.2,
-                  weight: 2
-                }}
-              >
-                <Popup>
-                  <div>
-                    <h3 className="font-semibold">{geofence.name}</h3>
-                    <p className="text-sm text-gray-600">{geofence.address}</p>
-                    <p className="text-xs text-gray-500">Client ID: {geofence.client}</p>
-                    <p className="text-xs text-gray-500">Radius: {geofence.radius}m</p>
-                    <p className="text-xs text-gray-500">Type: {geofence.geofence_type}</p>
-                    <span className={`inline-block px-2 py-1 text-xs font-medium rounded mt-1 ${
-                      geofence.isInside
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {geofence.isInside ? 'Inside' : 'Outside'}
-                    </span>
-                  </div>
-                </Popup>
-              </Circle>
-            ))}
-
-            {/* Timesheet Entry Markers */}
-            {timesheetEntries.map((entry) => (
+            {currentLocation?.latitude && currentLocation?.longitude && (
               <Marker
-                key={entry.id}
-                position={[entry.coordinates.latitude, entry.coordinates.longitude]}
-                icon={createCustomIcon(entry.status === 'completed' ? '#10B981' : '#3B82F6')}
+                position={[currentLocation.latitude, currentLocation.longitude]}
+                icon={createCustomIcon('#3B82F6')}
               >
                 <Popup>
                   <div>
-                    <h3 className="font-semibold">{entry.client}</h3>
-                    <p className="text-sm text-gray-600">{entry.location}</p>
-                    <p className="text-xs text-gray-500">
-                      {entry.clockIn} - {entry.clockOut || 'Active'}
+                    <h3 className="font-semibold">Current Location</h3>
+                    <p className="text-sm text-gray-600">
+                      {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
                     </p>
-                    <p className="text-xs text-gray-500">Duration: {entry.duration}</p>
-                    <span className={`inline-block px-2 py-1 text-xs font-medium rounded mt-1 ${
-                      entry.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-                    }`}>
-                      {entry.status === 'completed' ? 'Completed' : 'In Progress'}
-                    </span>
+                    <p className="text-xs text-gray-500">Accuracy: {currentLocation.accuracy}m</p>
                   </div>
                 </Popup>
               </Marker>
-            ))}
+            )}
 
-            <MapUpdater center={[currentLocation.latitude, currentLocation.longitude]} />
+            {/* Geofence Circles */}
+            {(() => {
+              console.log('All geofences:', geofences);
+              const activeGeofences = geofences.filter(g => g.is_active && g.center_latitude && g.center_longitude);
+              console.log('Active geofences:', activeGeofences);
+              return activeGeofences.map((geofence) => {
+                const client = clients.find(c => c.id === geofence.client_id);
+                return (
+                  <Circle
+                    key={geofence.id}
+                    center={[geofence.center_latitude, geofence.center_longitude]}
+                    radius={geofence.radius_meters || 100}
+                    pathOptions={{
+                      color: geofence.isInside ? '#10B981' : '#6B7280',
+                      fillColor: geofence.isInside ? '#10B981' : '#6B7280',
+                      fillOpacity: 0.2,
+                      weight: 2
+                    }}
+                  >
+                    <Popup>
+                      <div>
+                        <h3 className="font-semibold">{geofence.name || 'Unnamed Geofence'}</h3>
+                        <p className="text-sm text-gray-600">{geofence.description || 'No description'}</p>
+                        <p className="text-xs text-gray-500">
+                          Client: {client ? `${client.first_name} ${client.last_name}` : 'Unknown'}
+                        </p>
+                        <p className="text-xs text-gray-500">Radius: {geofence.radius_meters || 100}m</p>
+                        <p className="text-xs text-gray-500">Type: {geofence.geofence_type || 'circle'}</p>
+                        <span className={`inline-block px-2 py-1 text-xs font-medium rounded mt-1 ${
+                          geofence.isInside
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {geofence.isInside ? 'Inside' : 'Outside'}
+                        </span>
+                      </div>
+                    </Popup>
+                  </Circle>
+                );
+              });
+            })()}
+
+            {/* Timesheet Entry Markers */}
+            {timesheetEntries.map((entry) => {
+              const client = clients.find(c => c.id === entry.client_id);
+              const clockInLocation = entry.clock_in_location;
+              const clockOutLocation = entry.clock_out_location;
+              
+              // Skip if no clock-in location or missing coordinates
+              if (!clockInLocation || !clockInLocation.latitude || !clockInLocation.longitude) {
+                return null;
+              }
+              
+              return (
+                <Marker
+                  key={entry.id}
+                  position={[clockInLocation.latitude, clockInLocation.longitude]}
+                  icon={createCustomIcon(entry.status === 'completed' ? '#10B981' : '#3B82F6')}
+                >
+                  <Popup>
+                    <div>
+                      <h3 className="font-semibold">
+                        {client ? `${client.first_name} ${client.last_name}` : 'Unknown Client'}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        {clockInLocation.address || `${clockInLocation.latitude.toFixed(6)}, ${clockInLocation.longitude.toFixed(6)}`}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {entry.clock_in_time ? new Date(entry.clock_in_time).toLocaleTimeString() : 'N/A'} - {entry.clock_out_time ? new Date(entry.clock_out_time).toLocaleTimeString() : 'Active'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Status: {entry.status}
+                      </p>
+                      <span className={`inline-block px-2 py-1 text-xs font-medium rounded mt-1 ${
+                        entry.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {entry.status === 'completed' ? 'Completed' : 'Active'}
+                      </span>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+
+            <MapUpdater center={[currentLocation?.latitude || 40.7128, currentLocation?.longitude || -74.0060]} />
+            {currentLocation?.latitude && currentLocation?.longitude && (
+              <div className="absolute top-4 right-4 bg-white p-2 rounded-lg shadow-lg text-xs">
+                <div className="font-medium">Your Location</div>
+                <div className="text-gray-600">
+                  {currentLocation.latitude.toFixed(4)}, {currentLocation.longitude.toFixed(4)}
+                </div>
+                <div className="text-gray-500">Accuracy: {currentLocation.accuracy}m</div>
+              </div>
+            )}
           </MapContainer>
         </div>
       </div>
@@ -475,10 +664,29 @@ const Timesheets = () => {
               </div>
             </div>
             
+            {/* Multiple shifts info */}
+            <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+              <p className="text-blue-800 text-sm">
+                💡 You can work multiple shifts per day. Clock out from your current shift before starting a new one.
+              </p>
+            </div>
+            
             {/* Location Status */}
             <div className="mb-6 p-4 bg-gray-50 rounded-lg">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">Current Location</h3>
+                <button
+                  onClick={() => {
+                    getCurrentLocation().then(location => {
+                      toast.success('Location updated!');
+                    }).catch(error => {
+                      toast.error('Failed to get location');
+                    });
+                  }}
+                  className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  📍 Get My Location
+                </button>
               </div>
               
               {locationError && (
@@ -487,28 +695,35 @@ const Timesheets = () => {
                 </div>
               )}
               
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-600">Latitude:</span>
-                  <span className="ml-2 font-medium">{currentLocation.latitude.toFixed(6)}</span>
+              {isGettingLocation ? (
+                <div className="flex items-center justify-center py-4">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mr-2"></div>
+                  <span className="text-sm text-gray-600">Getting your location...</span>
                 </div>
-                <div>
-                  <span className="text-gray-600">Longitude:</span>
-                  <span className="ml-2 font-medium">{currentLocation.longitude.toFixed(6)}</span>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600">Latitude:</span>
+                    <span className="ml-2 font-medium">{currentLocation?.latitude?.toFixed(6) || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Longitude:</span>
+                    <span className="ml-2 font-medium">{currentLocation?.longitude?.toFixed(6) || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Accuracy:</span>
+                    <span className="ml-2 font-medium">{currentLocation?.accuracy || 'N/A'}m</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Status:</span>
+                    <span className={`ml-2 px-2 py-1 text-xs font-medium rounded ${
+                      isTrackingLocation ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                    }`}>
+                      {isTrackingLocation ? 'Tracking' : 'Manual'}
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-gray-600">Accuracy:</span>
-                  <span className="ml-2 font-medium">{currentLocation.accuracy}m</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Status:</span>
-                  <span className={`ml-2 px-2 py-1 text-xs font-medium rounded ${
-                    isTrackingLocation ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                  }`}>
-                    {isTrackingLocation ? 'Tracking' : 'Manual'}
-                  </span>
-                </div>
-              </div>
+              )}
               
               {isTrackingLocation && (
                 <div className="mt-3 p-2 bg-blue-50 rounded-lg">
@@ -541,12 +756,20 @@ const Timesheets = () => {
             {selectedClient && (
               <div className="mt-4 p-4 bg-green-50 rounded-lg">
                 <p className="text-green-800 font-medium">
-                  ✅ Clocked in at: {selectedClient.name}
+                  ✅ Clocked in at: {selectedClient.first_name} {selectedClient.last_name}
                 </p>
                 <p className="text-green-600 text-sm">{selectedClient.address}</p>
                 <p className="text-green-600 text-xs mt-1">
-                  Location recorded: {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
+                  Location recorded: {currentLocation?.latitude?.toFixed(6) || 'N/A'}, {currentLocation?.longitude?.toFixed(6) || 'N/A'}
                 </p>
+                <div className="mt-2">
+                  <button
+                    onClick={handleClockOut}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
+                  >
+                    ⏰ Clock Out Now
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -554,29 +777,66 @@ const Timesheets = () => {
           {/* Today's Entries */}
           <div className="bg-white rounded-lg shadow p-6">
             <h2 className="text-xl font-semibold text-gray-900 mb-4">Today's Entries</h2>
-            <div className="space-y-3">
-              {timesheetEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2 mb-1">
-                      <p className="font-medium text-gray-900">{entry.client}</p>
-                      <span className={`px-2 py-1 text-xs font-medium rounded ${getStatusColor(entry.status)}`}>
-                        {entry.status === 'completed' ? 'Completed' : 'In Progress'}
+            {timesheetEntries.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p>No timesheet entries for today</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {timesheetEntries.map((entry) => {
+                  const client = clients.find(c => c.id === entry.client_id);
+                  const clockInLocation = entry.clock_in_location;
+                  const clockOutLocation = entry.clock_out_location;
+                  
+                  return (
+                    <div key={entry.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2 mb-1">
+                          <p className="font-medium text-gray-900">
+                            {client ? `${client.first_name} ${client.last_name}` : 'Unknown Client'}
+                          </p>
+                          <span className={`px-2 py-1 text-xs font-medium rounded ${getStatusColor(entry.status)}`}>
+                            {entry.status === 'completed' ? 'Completed' : entry.status === 'active' ? 'Active' : 'Pending'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {clockInLocation?.address || 'Location not recorded'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {entry.clock_in_time ? new Date(entry.clock_in_time).toLocaleTimeString() : 'N/A'} - {entry.clock_out_time ? new Date(entry.clock_out_time).toLocaleTimeString() : 'Active'}
+                        </p>
+                        <p className="text-xs text-blue-600">
+                          📍 {entry.total_hours ? `${entry.total_hours.toFixed(2)}h` : '0h'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-medium text-gray-900">
+                          {entry.total_hours ? `${entry.total_hours.toFixed(2)}h` : '0h'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {clockInLocation?.latitude?.toFixed(4) || 'N/A'}, {clockInLocation?.longitude?.toFixed(4) || 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+                
+                {/* Today's Total */}
+                {timesheetEntries.length > 1 && (
+                  <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium text-blue-900">Today's Total</span>
+                      <span className="font-bold text-blue-900">
+                        {timesheetEntries.reduce((total, entry) => total + (entry.total_hours || 0), 0).toFixed(2)}h
                       </span>
                     </div>
-                    <p className="text-sm text-gray-600">{entry.location}</p>
-                    <p className="text-xs text-gray-500">{entry.clockIn} - {entry.clockOut || 'Active'}</p>
-                    <p className="text-xs text-blue-600">📍 {entry.geofence}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium text-gray-900">{entry.duration}</p>
-                    <p className="text-xs text-gray-500">
-                      {entry.coordinates.latitude.toFixed(4)}, {entry.coordinates.longitude.toFixed(4)}
+                    <p className="text-xs text-blue-600 mt-1">
+                      {timesheetEntries.length} shift{timesheetEntries.length !== 1 ? 's' : ''} today
                     </p>
                   </div>
-                </div>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -601,32 +861,37 @@ const Timesheets = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                {geofences.filter(g => g.is_active).map((geofence) => (
-                  <div
-                    key={geofence.id}
-                    className={`p-3 rounded-lg border ${
-                      geofence.isInside
-                        ? 'bg-green-50 border-green-200'
-                        : 'bg-gray-50 border-gray-200'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{geofence.name}</p>
-                        <p className="text-sm text-gray-600">{geofence.address}</p>
-                        <p className="text-xs text-gray-500">Client ID: {geofence.client}</p>
-                        <p className="text-xs text-gray-500">Radius: {geofence.radius}m</p>
-                      </div>
-                      <span className={`px-2 py-1 text-xs font-medium rounded ${
+                {geofences.filter(g => g.is_active).map((geofence) => {
+                  const client = clients.find(c => c.id === geofence.client_id);
+                  return (
+                    <div
+                      key={geofence.id}
+                      className={`p-3 rounded-lg border ${
                         geofence.isInside
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {geofence.isInside ? 'Inside' : 'Outside'}
-                      </span>
+                          ? 'bg-green-50 border-green-200'
+                          : 'bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-gray-900">{geofence.name || 'Unnamed Geofence'}</p>
+                          <p className="text-sm text-gray-600">{geofence.description || 'No description'}</p>
+                          <p className="text-xs text-gray-500">
+                            Client: {client ? `${client.first_name} ${client.last_name}` : 'Unknown'}
+                          </p>
+                          <p className="text-xs text-gray-500">Radius: {geofence.radius_meters || 100}m</p>
+                        </div>
+                        <span className={`px-2 py-1 text-xs font-medium rounded ${
+                          geofence.isInside
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {geofence.isInside ? 'Inside' : 'Outside'}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

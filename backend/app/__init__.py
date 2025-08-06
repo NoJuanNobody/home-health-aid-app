@@ -19,6 +19,7 @@ bcrypt = Bcrypt()
 
 def create_app(config_name='development'):
     app = Flask(__name__)
+    app.url_map.strict_slashes = False
     
     # Configuration
     if config_name == 'development':

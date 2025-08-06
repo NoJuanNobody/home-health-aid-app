@@ -5,6 +5,7 @@ from app.models.geolocation.location import Location
 from app.models.geolocation.geofence import Geofence
 from app.models.auth.user import User
 from app.models.reporting.audit_log import AuditLog
+from app.services.geolocation.geocoding_service import geocoding_service
 from datetime import datetime, timedelta
 import uuid
 
@@ -323,3 +324,97 @@ def get_active_tracking():
     return jsonify({
         'active_tracking': user_locations
     })
+
+@geolocation_bp.route('/geocode/address', methods=['POST'])
+@jwt_required()
+def geocode_address():
+    """Convert address to coordinates"""
+    data = request.get_json()
+    
+    if not data.get('address'):
+        return jsonify({'error': 'Address is required'}), 400
+    
+    address = data['address']
+    timeout = data.get('timeout', 10)
+    max_retries = data.get('max_retries', 3)
+    
+    result = geocoding_service.address_to_coordinates(address, timeout, max_retries)
+    
+    if result:
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Could not geocode the provided address'
+        }), 400
+
+@geolocation_bp.route('/geocode/coordinates', methods=['POST'])
+@jwt_required()
+def reverse_geocode():
+    """Convert coordinates to address"""
+    data = request.get_json()
+    
+    if not data.get('latitude') or not data.get('longitude'):
+        return jsonify({'error': 'Latitude and longitude are required'}), 400
+    
+    latitude = data['latitude']
+    longitude = data['longitude']
+    timeout = data.get('timeout', 10)
+    max_retries = data.get('max_retries', 3)
+    
+    # Validate coordinates
+    if not geocoding_service.validate_coordinates(latitude, longitude):
+        return jsonify({'error': 'Invalid coordinates provided'}), 400
+    
+    result = geocoding_service.coordinates_to_address(latitude, longitude, timeout, max_retries)
+    
+    if result:
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Could not reverse geocode the provided coordinates'
+        }), 400
+
+@geolocation_bp.route('/geocode/distance', methods=['POST'])
+@jwt_required()
+def calculate_distance():
+    """Calculate distance between two points"""
+    data = request.get_json()
+    
+    required_fields = ['lat1', 'lon1', 'lat2', 'lon2']
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({'error': f'{field} is required'}), 400
+    
+    lat1 = data['lat1']
+    lon1 = data['lon1']
+    lat2 = data['lat2']
+    lon2 = data['lon2']
+    
+    # Validate coordinates
+    if not geocoding_service.validate_coordinates(lat1, lon1):
+        return jsonify({'error': 'Invalid first point coordinates'}), 400
+    
+    if not geocoding_service.validate_coordinates(lat2, lon2):
+        return jsonify({'error': 'Invalid second point coordinates'}), 400
+    
+    distance = geocoding_service.get_distance_between_points(lat1, lon1, lat2, lon2)
+    
+    if distance is not None:
+        return jsonify({
+            'success': True,
+            'distance_meters': distance,
+            'distance_km': distance / 1000
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Could not calculate distance between the provided points'
+        }), 400

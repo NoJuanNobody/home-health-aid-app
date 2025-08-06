@@ -5,6 +5,8 @@ from app.models.timesheet.timesheet import Timesheet
 from app.models.timesheet.break_time import BreakTime
 from app.models.auth.user import User
 from app.models.reporting.audit_log import AuditLog
+from app.models.geolocation.geofence import Geofence
+from app.models.client.client import Client
 from datetime import datetime, date
 import uuid
 
@@ -79,15 +81,15 @@ def create_timesheet():
     if not data.get('client_id') or not data.get('date'):
         return jsonify({'error': 'Client ID and date are required'}), 400
     
-    # Check if timesheet already exists for this user, client, and date
-    existing_timesheet = Timesheet.query.filter_by(
+    # Check if user is already clocked in for this client (has an active timesheet)
+    active_timesheet = Timesheet.query.filter_by(
         user_id=current_user_id,
         client_id=data['client_id'],
-        date=date.fromisoformat(data['date'])
+        status='active'
     ).first()
     
-    if existing_timesheet:
-        return jsonify({'error': 'Timesheet already exists for this date and client'}), 400
+    if active_timesheet:
+        return jsonify({'error': 'You are already clocked in for this client. Please clock out first.'}), 400
     
     timesheet = Timesheet(
         user_id=current_user_id,
@@ -135,6 +137,47 @@ def clock_in(timesheet_id):
     
     data = request.get_json()
     location = data.get('location') if data else None
+    
+    # Validate geofence if location is provided
+    if location and location.get('latitude') and location.get('longitude'):
+        # Get client for this timesheet
+        client = Client.query.get(timesheet.client_id)
+        if not client:
+            return jsonify({'error': 'Client not found'}), 404
+        
+        # Check if user is inside any geofence for this client
+        client_geofences = Geofence.query.filter_by(
+            client_id=timesheet.client_id,
+            is_active=True
+        ).all()
+        
+        if not client_geofences:
+            return jsonify({'error': 'No geofences found for this client'}), 400
+        
+        # Check if user is inside any of the client's geofences
+        user_lat = location['latitude']
+        user_lng = location['longitude']
+        inside_geofence = False
+        
+        for geofence in client_geofences:
+            # Calculate distance between user and geofence center
+            from geopy.distance import geodesic
+            user_coords = (user_lat, user_lng)
+            geofence_coords = (geofence.center_latitude, geofence.center_longitude)
+            distance = geodesic(user_coords, geofence_coords).meters
+            
+            if distance <= geofence.radius_meters:
+                inside_geofence = True
+                break
+        
+        if not inside_geofence:
+            return jsonify({
+                'error': 'You must be inside a client geofence to clock in',
+                'distance_to_nearest': min([
+                    geodesic((user_lat, user_lng), (g.center_latitude, g.center_longitude)).meters 
+                    for g in client_geofences
+                ])
+            }), 400
     
     timesheet.clock_in(location)
     db.session.commit()
