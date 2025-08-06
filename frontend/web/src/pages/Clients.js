@@ -8,6 +8,9 @@ const Clients = () => {
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
+  const [caregivers, setCaregivers] = useState([]);
+  const [showAssignmentModal, setShowAssignmentModal] = useState(false);
+  const [clientAssignments, setClientAssignments] = useState([]);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -31,7 +34,14 @@ const Clients = () => {
 
   useEffect(() => {
     fetchClients();
+    fetchCaregivers();
   }, []);
+
+  useEffect(() => {
+    if (selectedClient) {
+      fetchClientAssignments(selectedClient.id);
+    }
+  }, [selectedClient]);
 
   const fetchClients = async () => {
     try {
@@ -43,6 +53,26 @@ const Clients = () => {
       toast.error('Failed to load clients');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCaregivers = async () => {
+    try {
+      const response = await api.get('/caregiver');
+      setCaregivers(response.data.caregivers);
+    } catch (error) {
+      console.error('Error fetching caregivers:', error);
+      toast.error('Failed to load caregivers');
+    }
+  };
+
+  const fetchClientAssignments = async (clientId) => {
+    try {
+      const response = await api.get(`/caregiver-assignment/client/${clientId}`);
+      setClientAssignments(response.data.assignments);
+    } catch (error) {
+      console.error('Error fetching client assignments:', error);
+      // Don't show error toast as this might be expected for new clients
     }
   };
 
@@ -157,6 +187,41 @@ const Clients = () => {
     setShowCreateForm(false);
     setEditingClient(null);
     resetForm();
+  };
+
+  const handleAssignCaregiver = async (caregiverId, assignmentType = 'primary') => {
+    if (!selectedClient) return;
+
+    try {
+      await api.post('/caregiver-assignment', {
+        caregiver_id: caregiverId,
+        client_id: selectedClient.id,
+        assignment_type: assignmentType,
+        start_date: new Date().toISOString().split('T')[0],
+        notes: `Assigned by admin on ${new Date().toLocaleDateString()}`
+      });
+      
+      toast.success('Caregiver assigned successfully!');
+      fetchClientAssignments(selectedClient.id);
+    } catch (error) {
+      console.error('Error assigning caregiver:', error);
+      toast.error(error.response?.data?.error || 'Failed to assign caregiver');
+    }
+  };
+
+  const handleRemoveAssignment = async (assignmentId) => {
+    if (!window.confirm('Are you sure you want to remove this assignment?')) {
+      return;
+    }
+
+    try {
+      await api.delete(`/caregiver-assignment/${assignmentId}`);
+      toast.success('Assignment removed successfully!');
+      fetchClientAssignments(selectedClient.id);
+    } catch (error) {
+      console.error('Error removing assignment:', error);
+      toast.error(error.response?.data?.error || 'Failed to remove assignment');
+    }
   };
 
   return (
@@ -574,6 +639,59 @@ const Clients = () => {
                       )}
                     </div>
                   </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900">Caregiver Assignments</h3>
+                      <button
+                        onClick={() => setShowAssignmentModal(true)}
+                        className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
+                      >
+                        + Assign Caregiver
+                      </button>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      {clientAssignments.length > 0 ? (
+                        <div className="space-y-3">
+                          {clientAssignments.map((assignment) => (
+                            <div key={assignment.id} className="flex justify-between items-center p-3 bg-white rounded border">
+                              <div>
+                                <div className="font-medium text-gray-900">
+                                  {assignment.caregiver?.name || 'Unknown Caregiver'}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  {assignment.assignment_type} • {assignment.is_current ? 'Active' : 'Inactive'}
+                                </div>
+                                {assignment.notes && (
+                                  <div className="text-xs text-gray-500 mt-1">{assignment.notes}</div>
+                                )}
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className={`px-2 py-1 text-xs rounded-full ${
+                                  assignment.assignment_type === 'primary' 
+                                    ? 'bg-blue-100 text-blue-800' 
+                                    : 'bg-gray-100 text-gray-800'
+                                }`}>
+                                  {assignment.assignment_type}
+                                </span>
+                                <button
+                                  onClick={() => handleRemoveAssignment(assignment.id)}
+                                  className="text-red-600 hover:text-red-800 text-sm"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4">
+                          <p className="text-gray-500 text-sm">No caregivers assigned</p>
+                          <p className="text-gray-400 text-xs mt-1">Click "Assign Caregiver" to add one</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   
                   <h3 className="text-lg font-semibold text-gray-900 mb-4 mt-6">Quick Actions</h3>
                   <div className="grid grid-cols-2 gap-3">
@@ -617,6 +735,67 @@ const Clients = () => {
           )}
         </div>
       </div>
+
+      {/* Caregiver Assignment Modal */}
+      {showAssignmentModal && selectedClient && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Assign Caregiver to {selectedClient.first_name} {selectedClient.last_name}
+              </h3>
+              
+              <div className="space-y-4">
+                {caregivers.filter(cg => cg.is_active).map((caregiver) => {
+                  const isAssigned = clientAssignments.some(
+                    assignment => assignment.caregiver_id === caregiver.id && assignment.is_current
+                  );
+                  
+                  return (
+                    <div key={caregiver.id} className="flex justify-between items-center p-3 border rounded-lg">
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          {caregiver.first_name} {caregiver.last_name}
+                        </div>
+                        <div className="text-sm text-gray-600">{caregiver.email}</div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {isAssigned ? (
+                          <span className="text-sm text-green-600">✓ Assigned</span>
+                        ) : (
+                          <div className="flex space-x-1">
+                            <button
+                              onClick={() => handleAssignCaregiver(caregiver.id, 'primary')}
+                              className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
+                            >
+                              Primary
+                            </button>
+                            <button
+                              onClick={() => handleAssignCaregiver(caregiver.id, 'backup')}
+                              className="px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded hover:bg-gray-200"
+                            >
+                              Backup
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              <div className="flex justify-end mt-6">
+                <button
+                  onClick={() => setShowAssignmentModal(false)}
+                  className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -220,4 +220,20 @@ def get_my_assignments():
     
     return jsonify({
         'assignments': [assignment.to_dict() for assignment in current_assignments]
+    })
+
+@caregiver_assignment_bp.route('/client/<client_id>', methods=['GET'])
+@jwt_required()
+def get_client_assignments(client_id):
+    """Get all assignments for a specific client"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if user.role.name not in ['admin', 'manager']:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    assignments = CaregiverAssignment.query.filter_by(client_id=client_id).all()
+    
+    return jsonify({
+        'assignments': [assignment.to_dict() for assignment in assignments]
     }) 

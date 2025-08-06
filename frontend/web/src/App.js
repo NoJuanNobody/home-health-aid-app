@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Timesheets from './pages/Timesheets';
 import Communication from './pages/Communication';
 import Clients from './pages/Clients';
+import Caregivers from './pages/Caregivers';
 import Tasks from './pages/Tasks';
 import Reports from './pages/Reports';
 import Analytics from './pages/Analytics';
@@ -37,6 +38,7 @@ function App() {
                   <Route path="/timesheets" element={<Timesheets />} />
                   <Route path="/communication" element={<Communication />} />
                   <Route path="/clients" element={<Clients />} />
+                  <Route path="/caregivers" element={<Caregivers />} />
                   <Route path="/tasks" element={<Tasks />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/analytics" element={<Analytics />} />
