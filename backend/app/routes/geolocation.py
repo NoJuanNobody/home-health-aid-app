@@ -130,14 +130,40 @@ def get_location_history():
 @geolocation_bp.route('/geofences', methods=['GET'])
 @jwt_required()
 def get_geofences():
-    """Get all geofences"""
+    """Get geofences based on user role"""
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
     
-    if user.role.name not in ['admin', 'manager']:
+    if user.role.name == 'admin':
+        # Admins can see all geofences
+        geofences = Geofence.query.filter_by(is_active=True).all()
+    elif user.role.name == 'manager':
+        # Managers can see all geofences
+        geofences = Geofence.query.filter_by(is_active=True).all()
+    elif user.role.name == 'caregiver':
+        # Caregivers can only see geofences for their assigned clients
+        from app.models.client.caregiver_assignment import CaregiverAssignment
+        
+        # Get current caregiver assignments
+        assignments = CaregiverAssignment.query.filter_by(
+            caregiver_id=current_user_id,
+            is_active=True
+        ).all()
+        
+        # Get client IDs that this caregiver is assigned to
+        assigned_client_ids = [assignment.client_id for assignment in assignments if assignment.is_current()]
+        
+        if not assigned_client_ids:
+            # No assignments, return empty list
+            return jsonify({'geofences': []})
+        
+        # Get geofences for assigned clients only
+        geofences = Geofence.query.filter(
+            Geofence.is_active == True,
+            Geofence.client_id.in_(assigned_client_ids)
+        ).all()
+    else:
         return jsonify({'error': 'Access denied'}), 403
-    
-    geofences = Geofence.query.filter_by(is_active=True).all()
     
     return jsonify({
         'geofences': [gf.to_dict() for gf in geofences]

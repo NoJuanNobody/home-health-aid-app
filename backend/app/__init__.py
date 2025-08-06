@@ -49,6 +49,7 @@ def create_app(config_name='development'):
     from app.routes.geolocation import geolocation_bp
     from app.routes.communication import communication_bp
     from app.routes.client import client_bp
+    from app.routes.caregiver_assignment import caregiver_assignment_bp
     from app.routes.task import task_bp
     from app.routes.reporting import reporting_bp
     from app.routes.analytics import analytics_bp
@@ -58,6 +59,7 @@ def create_app(config_name='development'):
     app.register_blueprint(geolocation_bp, url_prefix='/api/geolocation')
     app.register_blueprint(communication_bp, url_prefix='/api/communication')
     app.register_blueprint(client_bp, url_prefix='/api/client')
+    app.register_blueprint(caregiver_assignment_bp, url_prefix='/api/caregiver-assignment')
     app.register_blueprint(task_bp, url_prefix='/api/task')
     app.register_blueprint(reporting_bp, url_prefix='/api/reporting')
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')

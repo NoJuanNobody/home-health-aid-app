@@ -11,6 +11,11 @@ export const authService = {
     return response.data;
   },
 
+  async loginDevUser(email) {
+    const response = await api.post(`/auth/login/dev/${encodeURIComponent(email)}`);
+    return response.data;
+  },
+
   async register(userData) {
     const response = await api.post('/auth/register', userData);
     return response.data;

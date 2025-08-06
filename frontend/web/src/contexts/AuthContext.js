@@ -20,44 +20,123 @@ export const AuthProvider = ({ children }) => {
 
   // Development mode - bypass authentication
   const isDevelopment = process.env.NODE_ENV === 'development';
-  const devUser = {
-    id: 1,
-    name: 'Development User',
-    email: 'dev@example.com',
-    role: 'admin', // Changed from 'caregiver' to 'admin'
-    phone: '+1 (555) 123-4567',
-    address: '123 Dev Street, Development City',
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z'
+  
+  // Available development users
+  const devUsers = {
+    admin: {
+      id: 1,
+      name: 'Admin User',
+      email: 'admin@homehealth.com',
+      username: 'admin',
+      role: 'admin',
+      phone: '+1 (555) 123-4567',
+      address: '123 Admin Street, Admin City',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z'
+    },
+    manager: {
+      id: 2,
+      name: 'Sarah Johnson',
+      email: 'manager@homehealth.com',
+      username: 'manager',
+      role: 'manager',
+      phone: '+1 (555) 234-5678',
+      address: '456 Manager Ave, Manager City',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z'
+    },
+    caregiver1: {
+      id: 3,
+      name: 'Maria Garcia',
+      email: 'caregiver1@homehealth.com',
+      username: 'caregiver1',
+      role: 'caregiver',
+      phone: '+1 (555) 345-6789',
+      address: '789 Caregiver St, Caregiver City',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z'
+    },
+    caregiver2: {
+      id: 4,
+      name: 'John Smith',
+      email: 'caregiver2@homehealth.com',
+      username: 'caregiver2',
+      role: 'caregiver',
+      phone: '+1 (555) 456-7890',
+      address: '321 Caregiver Rd, Caregiver City',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z'
+    }
   };
 
   useEffect(() => {
     const initializeAuth = async () => {
-      // In development mode, automatically log in with admin user
+      // In development mode, only auto-login if no token exists and auto-login is not prevented
       if (isDevelopment && !token && !preventAutoLogin) {
         console.log('🔧 Development mode: Auto-login enabled');
         try {
           const response = await authService.loginDev();
           const { access_token, user: userData } = response;
           
-          setUser(userData);
+          // Update with our development admin user info
+          const updatedUserData = {
+            ...userData,
+            name: devUsers.admin.name,
+            email: devUsers.admin.email,
+            role: devUsers.admin.role,
+            phone: devUsers.admin.phone,
+            address: devUsers.admin.address
+          };
+          
+          setUser(updatedUserData);
           setToken(access_token);
           localStorage.setItem('token', access_token);
+          localStorage.setItem('devUser', JSON.stringify(updatedUserData));
           setLoading(false);
           return;
         } catch (error) {
           console.error('Development auto-login failed:', error);
-          // Fallback to dev user if API fails
-          setUser(devUser);
+          // Fallback to admin user if API fails
+          setUser(devUsers.admin);
           setToken('dev-token');
           localStorage.setItem('token', 'dev-token');
         }
       }
 
-      // In development mode with token, just set the dev user
+      // In development mode with existing token, try to restore user state
       if (isDevelopment && token && !preventAutoLogin) {
-        console.log('🔧 Development mode: Using dev user');
-        setUser(devUser);
+        console.log('🔧 Development mode: Restoring user state');
+        // Try to get user from localStorage or default to admin
+        const savedUser = localStorage.getItem('devUser');
+        if (savedUser) {
+          try {
+            const parsedUser = JSON.parse(savedUser);
+            setUser(parsedUser);
+            
+            // If we have a real JWT token, verify it's still valid
+            if (token !== 'dev-token') {
+              try {
+                const userData = await authService.getProfile();
+                // Update with our development user info
+                const updatedUserData = {
+                  ...userData,
+                  name: parsedUser.name,
+                  email: parsedUser.email,
+                  role: parsedUser.role,
+                  phone: parsedUser.phone,
+                  address: parsedUser.address
+                };
+                setUser(updatedUserData);
+              } catch (error) {
+                console.error('Token validation failed, falling back to saved user');
+              }
+            }
+          } catch (e) {
+            setUser(devUsers.admin);
+          }
+        } else {
+          setUser(devUsers.admin);
+        }
         setLoading(false);
         return;
       }
@@ -142,6 +221,7 @@ export const AuthProvider = ({ children }) => {
       console.error('Logout error:', error);
     } finally {
       localStorage.removeItem('token');
+      localStorage.removeItem('devUser'); // Clear saved user state
       setToken(null);
       setUser(null);
       setPreventAutoLogin(true); // Prevent auto-login after logout
@@ -152,7 +232,7 @@ export const AuthProvider = ({ children }) => {
   const updateProfile = async (profileData) => {
     // In development mode, just update the local user
     if (isDevelopment) {
-      const updatedUser = { ...devUser, ...profileData };
+      const updatedUser = { ...user, ...profileData };
       setUser(updatedUser);
       toast.success('Profile updated successfully! (Development mode)');
       return updatedUser;
@@ -185,6 +265,64 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Development user switching functionality
+  const switchToUser = async (userKey) => {
+    if (!isDevelopment) {
+      toast.error('User switching is only available in development mode');
+      return;
+    }
+
+    const selectedUser = devUsers[userKey];
+    if (!selectedUser) {
+      toast.error('User not found');
+      return;
+    }
+
+    console.log('🔧 Switching to user:', selectedUser.name, selectedUser.role);
+    
+    try {
+      // Get a proper JWT token for the selected user
+      const response = await authService.loginDevUser(selectedUser.email);
+      const { access_token, user: userData } = response;
+      
+      // Update the user data with our development user info
+      const updatedUserData = {
+        ...userData,
+        name: selectedUser.name,
+        email: selectedUser.email,
+        role: selectedUser.role,
+        phone: selectedUser.phone,
+        address: selectedUser.address
+      };
+      
+      setUser(updatedUserData);
+      setToken(access_token);
+      localStorage.setItem('token', access_token);
+      localStorage.setItem('devUser', JSON.stringify(updatedUserData)); // Save user state
+      setPreventAutoLogin(true); // Prevent auto-login after switching
+      toast.success(`Switched to ${selectedUser.name} (${selectedUser.role})`);
+      
+      // Force page reload to refresh all data with new user context
+      console.log('🔄 Reloading page to refresh data for new user...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000); // Small delay to show the success toast
+    } catch (error) {
+      console.error('Failed to get JWT token for user switch:', error);
+      toast.error('Failed to switch user. Please try again.');
+    }
+  };
+
+  const getAvailableUsers = () => {
+    if (!isDevelopment) return [];
+    return Object.entries(devUsers).map(([key, user]) => ({
+      key,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    }));
+  };
+
   const value = {
     user,
     loading,
@@ -193,6 +331,10 @@ export const AuthProvider = ({ children }) => {
     logout,
     updateProfile,
     changePassword,
+    // Development mode functions
+    switchToUser,
+    getAvailableUsers,
+    isDevelopment,
   };
 
   return (

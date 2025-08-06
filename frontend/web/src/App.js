@@ -12,6 +12,7 @@ import Analytics from './pages/Analytics';
 import GeolocationManagement from './pages/GeolocationManagement';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
+import DevUserSwitcher from './components/DevUserSwitcher';
 
 function App() {
   const { user, loading } = useAuth();
@@ -23,6 +24,7 @@ function App() {
   return (
     <Router>
       <div className="App">
+        <DevUserSwitcher />
         <Routes>
           <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <Login />} />
           <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />

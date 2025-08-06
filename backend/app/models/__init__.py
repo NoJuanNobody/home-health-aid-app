@@ -8,6 +8,7 @@ from .communication.message import Message
 from .communication.conversation import Conversation
 from .client.client import Client
 from .client.care_plan import CarePlan
+from .client.caregiver_assignment import CaregiverAssignment
 from .task.task import Task
 from .task.task_assignment import TaskAssignment
 from .reporting.report import Report
@@ -15,6 +16,6 @@ from .reporting.audit_log import AuditLog
 
 __all__ = [
     'User', 'Role', 'Timesheet', 'BreakTime', 'Location', 'Geofence',
-    'Message', 'Conversation', 'Client', 'CarePlan', 'Task', 'TaskAssignment',
-    'Report', 'AuditLog'
+    'Message', 'Conversation', 'Client', 'CarePlan', 'CaregiverAssignment',
+    'Task', 'TaskAssignment', 'Report', 'AuditLog'
 ]

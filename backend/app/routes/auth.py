@@ -93,6 +93,25 @@ def login_dev():
         'refresh_token': refresh_token
     })
 
+@auth_bp.route('/login/dev/<user_email>', methods=['POST'])
+def login_dev_user(user_email):
+    """Development login endpoint - creates JWT token for specific user by email"""
+    # Find the user by email
+    user = User.query.filter_by(email=user_email).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Generate tokens
+    access_token = create_access_token(identity=user.id)
+    refresh_token = create_refresh_token(identity=user.id)
+    
+    return jsonify({
+        'message': 'Development login successful',
+        'user': user.to_dict(),
+        'access_token': access_token,
+        'refresh_token': refresh_token
+    })
+
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """Login user"""

@@ -13,6 +13,7 @@ from app.models.auth.user import User
 from app.models.auth.role import Role
 from app.models.client.client import Client
 from app.models.geolocation.geofence import Geofence
+from app.models.client.caregiver_assignment import CaregiverAssignment
 from datetime import datetime
 
 def create_roles():
@@ -53,6 +54,24 @@ def create_users():
             'last_name': 'Johnson',
             'phone': '+1 (555) 234-5678',
             'role_name': 'manager'
+        },
+        {
+            'email': 'caregiver1@homehealth.com',
+            'username': 'caregiver1',
+            'password': 'caregiver123',
+            'first_name': 'Maria',
+            'last_name': 'Garcia',
+            'phone': '+1 (555) 345-6789',
+            'role_name': 'caregiver'
+        },
+        {
+            'email': 'caregiver2@homehealth.com',
+            'username': 'caregiver2',
+            'password': 'caregiver123',
+            'first_name': 'John',
+            'last_name': 'Smith',
+            'phone': '+1 (555) 456-7890',
+            'role_name': 'caregiver'
         }
     ]
     
@@ -195,6 +214,57 @@ def create_geofences():
     
     db.session.commit()
 
+def create_caregiver_assignments():
+    """Create sample caregiver assignments"""
+    # Get caregivers and clients
+    caregivers = User.query.filter_by(role_id=Role.query.filter_by(name='caregiver').first().id).all()
+    clients = Client.query.all()
+    manager = User.query.filter_by(role_id=Role.query.filter_by(name='manager').first().id).first()
+    
+    assignments_data = [
+        {
+            'caregiver_id': caregivers[0].id,  # Maria Garcia
+            'client_id': clients[0].id,  # Margaret Johnson
+            'assignment_type': 'primary',
+            'start_date': datetime(2024, 1, 1),
+            'notes': 'Primary caregiver for Margaret Johnson'
+        },
+        {
+            'caregiver_id': caregivers[0].id,  # Maria Garcia
+            'client_id': clients[1].id,  # Robert Smith
+            'assignment_type': 'primary',
+            'start_date': datetime(2024, 1, 15),
+            'notes': 'Primary caregiver for Robert Smith'
+        },
+        {
+            'caregiver_id': caregivers[1].id,  # John Smith
+            'client_id': clients[2].id,  # Helen Davis
+            'assignment_type': 'primary',
+            'start_date': datetime(2024, 2, 1),
+            'notes': 'Primary caregiver for Helen Davis'
+        }
+    ]
+    
+    for assignment_data in assignments_data:
+        # Check if assignment already exists
+        existing = CaregiverAssignment.query.filter_by(
+            caregiver_id=assignment_data['caregiver_id'],
+            client_id=assignment_data['client_id'],
+            is_active=True
+        ).first()
+        
+        if not existing:
+            assignment_data['assigned_by'] = manager.id
+            assignment = CaregiverAssignment(**assignment_data)
+            db.session.add(assignment)
+            
+            # Get caregiver and client names for logging
+            caregiver = User.query.get(assignment_data['caregiver_id'])
+            client = Client.query.get(assignment_data['client_id'])
+            print(f"Created assignment: {caregiver.first_name} {caregiver.last_name} -> {client.first_name} {client.last_name}")
+    
+    db.session.commit()
+
 def main():
     """Main function to seed all data"""
     app = create_app()
@@ -218,14 +288,20 @@ def main():
         print("\n4. Creating geofences...")
         create_geofences()
         
+        print("\n5. Creating caregiver assignments...")
+        create_caregiver_assignments()
+        
         print("\n✅ Database seeding completed successfully!")
         print("\n📋 Sample Data Created:")
-        print("   - 2 Users (admin, manager)")
+        print("   - 4 Users (admin, manager, 2 caregivers)")
         print("   - 3 Clients (Margaret, Robert, Helen)")
         print("   - 3 Geofences (client residences)")
+        print("   - 3 Caregiver Assignments")
         print("\n🔑 Login Credentials:")
         print("   - Admin: admin@homehealth.com / admin123")
         print("   - Manager: manager@homehealth.com / manager123")
+        print("   - Caregiver 1: caregiver1@homehealth.com / caregiver123")
+        print("   - Caregiver 2: caregiver2@homehealth.com / caregiver123")
 
 if __name__ == '__main__':
     main() 
