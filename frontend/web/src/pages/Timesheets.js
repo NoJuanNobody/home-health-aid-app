@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-le
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import api from '../services/apiService';
+import { useAuth } from '../contexts/AuthContext';
 import toast from 'react-hot-toast';
 
 // Fix for default markers in Leaflet
@@ -37,6 +38,7 @@ const MapUpdater = ({ center }) => {
 };
 
 const Timesheets = () => {
+  const { user } = useAuth();
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentLocation, setCurrentLocation] = useState({
@@ -248,17 +250,20 @@ const Timesheets = () => {
         return;
       }
       
-      // Create timesheet in backend
-      const today = new Date().toISOString().split('T')[0];
-      const timesheetData = {
+      // Auto clock-in with timesheet creation
+      const clockInData = {
         client_id: insideGeofence.client_id,
-        date: today,
-        notes: `Clocked in at ${client.first_name} ${client.last_name}'s residence`
+        location: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: location.accuracy,
+          address: insideGeofence.description
+        }
       };
       
       let timesheetResponse;
       try {
-        timesheetResponse = await api.post('/timesheet', timesheetData);
+        timesheetResponse = await api.post('/timesheet/clock-in', clockInData);
       } catch (error) {
         if (error.response?.data?.error?.includes('already clocked in')) {
           toast.error('You are already clocked in for this client. Please clock out first.');
@@ -268,18 +273,6 @@ const Timesheets = () => {
       }
       
       const timesheet = timesheetResponse.data.timesheet;
-      
-      // Clock in with location
-      const clockInData = {
-        location: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          accuracy: location.accuracy,
-          address: insideGeofence.description
-        }
-      };
-      
-      await api.post(`/timesheet/${timesheet.id}/clock-in`, clockInData);
       
       // Update local state
       setTimesheetEntries(prev => [...prev, timesheet]);
@@ -374,8 +367,15 @@ const Timesheets = () => {
         console.log('Timesheets response:', timesheetsResponse.data);
         setTimesheetEntries(timesheetsResponse.data.timesheets || []);
         
-        // Fetch clients
-        const clientsResponse = await api.get('/client');
+        // Fetch clients based on user role
+        let clientsResponse;
+        if (user?.role === 'caregiver') {
+          // Caregivers can only see their assigned clients
+          clientsResponse = await api.get('/client/assigned');
+        } else {
+          // Admin and managers can see all clients
+          clientsResponse = await api.get('/client');
+        }
         console.log('Clients response:', clientsResponse.data);
         setClients(clientsResponse.data.clients || []);
         
@@ -516,7 +516,7 @@ const Timesheets = () => {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-6 relative z-0">
       <h1 className="text-3xl font-bold text-gray-900 mb-6">Time Tracking & Location</h1>
       
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -526,7 +526,7 @@ const Timesheets = () => {
           {/* Map Section */}
       <div className="mt-6 bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Location Map</h2>
-        <div className="h-96 rounded-lg overflow-hidden">
+        <div className="h-96 rounded-lg overflow-hidden relative">
           <MapContainer
             center={[currentLocation?.latitude || 40.7128, currentLocation?.longitude || -74.0060]}
             zoom={13}
@@ -841,7 +841,7 @@ const Timesheets = () => {
         </div>
 
         {/* Sidebar - Geofences and Summary */}
-        <div className="space-y-6">
+        <div className="space-y-6 relative">
           {/* Geofences */}
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Geofences</h3>

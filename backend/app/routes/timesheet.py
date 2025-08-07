@@ -366,3 +366,133 @@ def reject_timesheet(timesheet_id):
         'message': 'Timesheet rejected successfully',
         'timesheet': timesheet.to_dict()
     })
+
+@timesheet_bp.route('/clock-in', methods=['POST'])
+@jwt_required()
+def auto_clock_in():
+    """Automatically create timesheet and clock in for a client"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    data = request.get_json()
+    
+    # Validate required fields
+    if not data.get('client_id'):
+        return jsonify({'error': 'Client ID is required'}), 400
+    
+    client_id = data['client_id']
+    location = data.get('location')
+    
+    # Validate that user is assigned to this client (for caregivers)
+    if user.role.name == 'caregiver':
+        from app.models.client.caregiver_assignment import CaregiverAssignment
+        
+        assignment = CaregiverAssignment.query.filter_by(
+            caregiver_id=current_user_id,
+            client_id=client_id,
+            is_active=True
+        ).first()
+        
+        if not assignment or not assignment.is_current():
+            return jsonify({'error': 'You are not assigned to this client'}), 403
+    
+    # Check if client exists
+    client = Client.query.get(client_id)
+    if not client:
+        return jsonify({'error': 'Client not found'}), 404
+    
+    # Check if user is already clocked in for any client
+    active_timesheet = Timesheet.query.filter_by(
+        user_id=current_user_id,
+        status='active'
+    ).first()
+    
+    if active_timesheet:
+        return jsonify({'error': 'You are already clocked in. Please clock out first.'}), 400
+    
+    # Validate geofence if location is provided
+    if location and location.get('latitude') and location.get('longitude'):
+        # Check if user is inside any geofence for this client
+        client_geofences = Geofence.query.filter_by(
+            client_id=client_id,
+            is_active=True
+        ).all()
+        
+        if not client_geofences:
+            return jsonify({'error': 'No geofences found for this client'}), 400
+        
+        # Check if user is inside any of the client's geofences
+        user_lat = location['latitude']
+        user_lng = location['longitude']
+        inside_geofence = False
+        
+        for geofence in client_geofences:
+            # Calculate distance between user and geofence center
+            from geopy.distance import geodesic
+            user_coords = (user_lat, user_lng)
+            geofence_coords = (geofence.center_latitude, geofence.center_longitude)
+            distance = geodesic(user_coords, geofence_coords).meters
+            
+            if distance <= geofence.radius_meters:
+                inside_geofence = True
+                break
+        
+        if not inside_geofence:
+            return jsonify({
+                'error': 'You must be inside a client geofence to clock in',
+                'distance_to_nearest': min([
+                    geodesic((user_lat, user_lng), (g.center_latitude, g.center_longitude)).meters 
+                    for g in client_geofences
+                ])
+            }), 400
+    
+    # Check if timesheet already exists for today
+    today = datetime.now().date()
+    existing_timesheet = Timesheet.query.filter_by(
+        user_id=current_user_id,
+        client_id=client_id,
+        date=today
+    ).first()
+    
+    if existing_timesheet:
+        # Use existing timesheet
+        timesheet = existing_timesheet
+        if timesheet.clock_in_time:
+            return jsonify({'error': 'Already clocked in for this client today'}), 400
+    else:
+        # Create new timesheet
+        timesheet = Timesheet(
+            user_id=current_user_id,
+            client_id=client_id,
+            date=today,
+            status='pending'
+        )
+        db.session.add(timesheet)
+        db.session.flush()  # Get the ID without committing
+    
+    # Clock in
+    timesheet.clock_in(location)
+    db.session.commit()
+    
+    # Log audit
+    audit_log = AuditLog(
+        user_id=current_user_id,
+        action='auto_clock_in',
+        resource_type='timesheet',
+        resource_id=timesheet.id,
+        details={
+            'client_id': client_id,
+            'location': location,
+            'timesheet_created': existing_timesheet is None
+        },
+        ip_address=request.remote_addr,
+        user_agent=request.headers.get('User-Agent')
+    )
+    db.session.add(audit_log)
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Clocked in successfully',
+        'timesheet': timesheet.to_dict(),
+        'timesheet_created': existing_timesheet is None
+    })

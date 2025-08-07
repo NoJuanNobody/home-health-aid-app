@@ -28,7 +28,7 @@ const DevUserSwitcher = () => {
   const availableUsers = getAvailableUsers();
 
   return (
-    <div className="fixed top-4 left-4 z-50">
+    <div className="fixed top-4 left-4 z-20">
       <div className="relative">
         {/* Current User Display */}
         <button
@@ -54,7 +54,7 @@ const DevUserSwitcher = () => {
 
         {/* User Switcher Dropdown */}
         {isOpen && (
-          <div className="absolute left-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+          <div className="absolute left-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-30">
             <div className="p-4">
               <h3 className="text-lg font-semibold text-gray-900 mb-3">
                 🔧 Development User Switcher
@@ -138,7 +138,7 @@ const DevUserSwitcher = () => {
       {/* Click outside to close */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40"
+          className="fixed inset-0 z-20"
           onClick={() => setIsOpen(false)}
         />
       )}

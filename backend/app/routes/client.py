@@ -389,3 +389,37 @@ def create_care_plan(client_id):
         'message': 'Care plan created successfully',
         'care_plan': care_plan.to_dict()
     }), 201
+
+@client_bp.route('/assigned', methods=['GET'])
+@jwt_required()
+def get_assigned_clients():
+    """Get clients assigned to current caregiver"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    if user.role.name != 'caregiver':
+        return jsonify({'error': 'Access denied'}), 403
+    
+    # Get caregiver assignments
+    from app.models.client.caregiver_assignment import CaregiverAssignment
+    
+    assignments = CaregiverAssignment.query.filter_by(
+        caregiver_id=current_user_id,
+        is_active=True
+    ).all()
+    
+    # Get assigned client IDs
+    assigned_client_ids = [assignment.client_id for assignment in assignments if assignment.is_current()]
+    
+    if not assigned_client_ids:
+        return jsonify({'clients': []})
+    
+    # Get assigned clients
+    clients = Client.query.filter(
+        Client.id.in_(assigned_client_ids),
+        Client.is_active == True
+    ).all()
+    
+    return jsonify({
+        'clients': [client.to_dict() for client in clients]
+    })
